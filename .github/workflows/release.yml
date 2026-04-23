@@ -82,9 +82,29 @@ jobs:
 
           sha256sum release-assets/*.zip > release-assets/checksums.txt
 
+      - name: Prepare release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES_SOURCE=".github/release-notes/${VERSION}.md"
+          NOTES_TARGET="release-assets/release-notes.md"
+
+          if [ -f "${NOTES_SOURCE}" ]; then
+            cp "${NOTES_SOURCE}" "${NOTES_TARGET}"
+          else
+            {
+              echo "## 更新内容"
+              echo
+              echo "- 发布版本：${VERSION}"
+            } > "${NOTES_TARGET}"
+          fi
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }}
+          body_path: release-assets/release-notes.md
           files: |
             release-assets/*.zip
             release-assets/checksums.txt
