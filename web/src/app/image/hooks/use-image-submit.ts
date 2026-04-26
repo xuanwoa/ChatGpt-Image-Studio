@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import {
   editImage,
   generateImageWithOptions,
-  upscaleImage,
   type ImageModel,
   type ImageQuality,
 } from "@/lib/api";
@@ -34,6 +33,7 @@ import {
   mergeResultImages,
   shouldFallbackSelectionEdit,
 } from "../submit-utils";
+import { buildSourceImageUrl } from "../view-utils";
 
 type ActiveRequestState = {
   conversationId: string;
@@ -53,7 +53,6 @@ type UseImageSubmitOptions = {
   parsedCount: number;
   imageSize: string;
   imageQuality: ImageQuality;
-  upscaleScale: string;
   selectedConversationId: string | null;
   editorTarget: EditorTarget | null;
   isSubmitting: boolean;
@@ -94,6 +93,28 @@ function buildConversationBase(conversationId: string, draftTurn: ImageConversat
   };
 }
 
+function buildSourceReference(payload: {
+  id: string;
+  role: "image" | "mask";
+  name: string;
+  url: string;
+}): StoredSourceImage {
+  if (payload.url.startsWith("data:")) {
+    return {
+      id: payload.id,
+      role: payload.role,
+      name: payload.name,
+      dataUrl: payload.url,
+    };
+  }
+  return {
+    id: payload.id,
+    role: payload.role,
+    name: payload.name,
+    url: payload.url,
+  };
+}
+
 export function useImageSubmit({
   mode,
   imagePrompt,
@@ -104,7 +125,6 @@ export function useImageSubmit({
   parsedCount,
   imageSize,
   imageQuality,
-  upscaleScale,
   selectedConversationId,
   editorTarget,
   isSubmitting,
@@ -135,24 +155,28 @@ export function useImageSubmit({
       return;
     }
 
-    const sourceReference = buildInpaintSourceReference(editorTarget.image);
-    const conversationId = editorTarget.conversationId;
+    const sourceReference = editorTarget.image ? buildInpaintSourceReference(editorTarget.image) : null;
+    const targetConversationId = editorTarget.conversationId ?? selectedConversationId;
+    const conversationId = targetConversationId ?? makeId();
+    const supportsEditableOutputOptions = editorTarget.image === null;
     const turnId = makeId();
     const now = new Date().toISOString();
     const draftTurn = createConversationTurn({
       turnId,
-      title: buildConversationTitle("edit", prompt, upscaleScale),
+      title: buildConversationTitle("edit", prompt),
       mode: "edit",
       prompt,
       model: imageModel,
       count: 1,
+      size: supportsEditableOutputOptions ? imageSize : undefined,
+      quality: supportsEditableOutputOptions ? imageQuality : undefined,
       sourceImages: [
-        {
+        buildSourceReference({
           id: makeId(),
           role: "image",
           name: editorTarget.imageName,
-          dataUrl: editorTarget.sourceDataUrl,
-        },
+          url: editorTarget.sourceDataUrl,
+        }),
         {
           id: makeId(),
           role: "mask",
@@ -190,15 +214,19 @@ export function useImageSubmit({
     });
 
     try {
-      await updateConversation(conversationId, (current) => {
-        if (!current) {
-          return buildConversationBase(conversationId, draftTurn);
-        }
-        return {
-          ...current,
-          turns: [...(current.turns ?? []), draftTurn],
-        };
-      });
+      if (targetConversationId) {
+        await updateConversation(conversationId, (current) => {
+          if (!current) {
+            return buildConversationBase(conversationId, draftTurn);
+          }
+          return {
+            ...current,
+            turns: [...(current.turns ?? []), draftTurn],
+          };
+        });
+      } else {
+        await persistConversation(buildConversationBase(conversationId, draftTurn));
+      }
 
       let fallbackImageFile = sourceReference
         ? null
@@ -210,6 +238,8 @@ export function useImageSubmit({
           images: fallbackImageFile ? [fallbackImageFile] : [],
           mask: mask.file,
           sourceReference,
+          size: supportsEditableOutputOptions ? imageSize : undefined,
+          quality: supportsEditableOutputOptions ? imageQuality : undefined,
           model: imageModel,
         });
       } catch (error) {
@@ -223,6 +253,8 @@ export function useImageSubmit({
           prompt,
           images: [fallbackImageFile],
           mask: mask.file,
+          size: supportsEditableOutputOptions ? imageSize : undefined,
+          quality: supportsEditableOutputOptions ? imageQuality : undefined,
           model: imageModel,
         });
       }
@@ -279,7 +311,11 @@ export function useImageSubmit({
     editorTarget,
     focusConversation,
     imageModel,
+    imageQuality,
+    imageSize,
     makeId,
+    persistConversation,
+    selectedConversationId,
     setActiveRequest,
     setImagePrompt,
     setIsSubmitting,
@@ -287,7 +323,6 @@ export function useImageSubmit({
     setSubmitElapsedSeconds,
     setSubmitStartedAt,
     updateConversation,
-    upscaleScale,
   ]);
 
   const handleRetryTurn = useCallback(async (conversationId: string, turn: ImageConversationTurn) => {
@@ -299,9 +334,8 @@ export function useImageSubmit({
     const prompt = turn.prompt?.trim() ?? "";
     const turnMode = turn.mode || "generate";
     const turnSourceImages = Array.isArray(turn.sourceImages) ? turn.sourceImages : [];
-    const turnImageSources = turnSourceImages.filter((item) => item.role === "image");
+      const turnImageSources = turnSourceImages.filter((item) => item.role === "image" && buildSourceImageUrl(item));
     const turnMaskSource = turnSourceImages.find((item) => item.role === "mask") ?? null;
-    const turnScale = turnMode === "upscale" ? turn.scale || "2x" : undefined;
     const turnQuality = turn.quality || "high";
     const expectedCount = Math.max(1, turn.count || 1);
 
@@ -309,7 +343,7 @@ export function useImageSubmit({
       toast.error("该记录缺少提示词，无法重试");
       return;
     }
-    if ((turnMode === "edit" || turnMode === "upscale") && turnImageSources.length === 0) {
+    if (turnMode === "edit" && turnImageSources.length === 0) {
       toast.error("该记录缺少源图，无法重试");
       return;
     }
@@ -318,14 +352,13 @@ export function useImageSubmit({
     const now = new Date().toISOString();
     const draftTurn = createConversationTurn({
       turnId,
-      title: buildConversationTitle(turnMode, prompt, turnScale || upscaleScale),
+      title: buildConversationTitle(turnMode, prompt),
       mode: turnMode,
       prompt,
       model: turn.model,
       count: expectedCount,
       size: turn.size,
-      quality: turnMode === "generate" && turnImageSources.length === 0 ? turnQuality : undefined,
-      scale: turnScale,
+      quality: turnMode === "edit" || (turnMode === "generate" && turnImageSources.length === 0) ? turnQuality : undefined,
       sourceImages: turnSourceImages,
       images: createLoadingImages(expectedCount, turnId),
       createdAt: now,
@@ -363,9 +396,9 @@ export function useImageSubmit({
       if (turnMode === "generate") {
         if (turnImageSources.length > 0) {
           const files = await Promise.all(
-            turnImageSources.map((item, index) => dataUrlToFile(item.dataUrl, item.name || `reference-${index + 1}.png`)),
+            turnImageSources.map((item, index) => dataUrlToFile(buildSourceImageUrl(item), item.name || `reference-${index + 1}.png`)),
           );
-          const data = await editImage({ prompt, images: files, model: turn.model });
+          const data = await editImage({ prompt, images: files, size: turn.size, quality: turnQuality, model: turn.model });
           resultItems = mergeResultImages(turnId, data.data || [], 1);
         } else {
           const data = await generateImageWithOptions(prompt, {
@@ -380,16 +413,11 @@ export function useImageSubmit({
 
       if (turnMode === "edit") {
         const files = await Promise.all(
-          turnImageSources.map((item, index) => dataUrlToFile(item.dataUrl, item.name || `image-${index + 1}.png`)),
+          turnImageSources.map((item, index) => dataUrlToFile(buildSourceImageUrl(item), item.name || `image-${index + 1}.png`)),
         );
-        const mask = turnMaskSource ? await dataUrlToFile(turnMaskSource.dataUrl, turnMaskSource.name || "mask.png") : null;
-        const data = await editImage({ prompt, images: files, mask, model: turn.model });
-        resultItems = mergeResultImages(turnId, data.data || [], 1);
-      }
-
-      if (turnMode === "upscale") {
-        const file = await dataUrlToFile(turnImageSources[0].dataUrl, turnImageSources[0].name || "upscale.png");
-        const data = await upscaleImage({ image: file, prompt, scale: turnScale || "2x", model: turn.model });
+        const maskURL = turnMaskSource ? buildSourceImageUrl(turnMaskSource) : "";
+        const mask = maskURL ? await dataUrlToFile(maskURL, turnMaskSource?.name || "mask.png") : null;
+        const data = await editImage({ prompt, images: files, mask, size: turn.size, quality: turnQuality, model: turn.model });
         resultItems = mergeResultImages(turnId, data.data || [], 1);
       }
 
@@ -411,7 +439,7 @@ export function useImageSubmit({
       if (failedCount > 0) {
         toast.error(`已返回结果，但有 ${failedCount} 张处理失败`);
       } else {
-        toast.success(turnMode === "generate" ? "图片已生成" : turnMode === "edit" ? "图片已编辑" : "图片已放大");
+        toast.success(turnMode === "generate" ? "图片已生成" : "图片已编辑");
       }
     } catch (error) {
       const message = formatImageError(error);
@@ -439,7 +467,7 @@ export function useImageSubmit({
       setActiveRequest(null);
       setSubmitStartedAt(null);
     }
-  }, [focusConversation, isSubmitting, setActiveRequest, setIsSubmitting, setSubmitElapsedSeconds, setSubmitStartedAt, updateConversation, upscaleScale]);
+  }, [focusConversation, isSubmitting, setActiveRequest, setIsSubmitting, setSubmitElapsedSeconds, setSubmitStartedAt, updateConversation]);
 
   const handleSubmit = useCallback(async () => {
     const prompt = imagePrompt.trim();
@@ -455,25 +483,19 @@ export function useImageSubmit({
       toast.error("编辑模式需要提示词");
       return;
     }
-    if (mode === "upscale" && imageSources.length === 0) {
-      toast.error("放大模式需要一张源图");
-      return;
-    }
-
     const conversationId = selectedConversationId ?? makeId();
     const turnId = makeId();
     const now = new Date().toISOString();
     const expectedCount = mode === "generate" && imageSources.length === 0 ? parsedCount : 1;
     const draftTurn = createConversationTurn({
       turnId,
-      title: buildConversationTitle(mode, prompt, upscaleScale),
+      title: buildConversationTitle(mode, prompt),
       mode,
       prompt,
       model: imageModel,
       count: expectedCount,
-      size: mode === "generate" ? imageSize : undefined,
-      quality: mode === "generate" && imageSources.length === 0 ? imageQuality : undefined,
-      scale: mode === "upscale" ? upscaleScale : undefined,
+      size: mode === "generate" || mode === "edit" ? imageSize : undefined,
+      quality: mode === "edit" || (mode === "generate" && imageSources.length === 0) ? imageQuality : undefined,
       sourceImages,
       images: createLoadingImages(expectedCount, turnId),
       createdAt: now,
@@ -517,9 +539,9 @@ export function useImageSubmit({
       if (mode === "generate") {
         if (imageSources.length > 0) {
           const files = await Promise.all(
-            imageSources.map((item, index) => dataUrlToFile(item.dataUrl, item.name || `reference-${index + 1}.png`)),
+            imageSources.map((item, index) => dataUrlToFile(buildSourceImageUrl(item), item.name || `reference-${index + 1}.png`)),
           );
-          const data = await editImage({ prompt, images: files, model: imageModel });
+          const data = await editImage({ prompt, images: files, size: imageSize, quality: imageQuality, model: imageModel });
           resultItems = mergeResultImages(turnId, data.data || [], 1);
         } else {
           const data = await generateImageWithOptions(prompt, {
@@ -534,16 +556,11 @@ export function useImageSubmit({
 
       if (mode === "edit") {
         const files = await Promise.all(
-          imageSources.map((item, index) => dataUrlToFile(item.dataUrl, item.name || `image-${index + 1}.png`)),
+          imageSources.map((item, index) => dataUrlToFile(buildSourceImageUrl(item), item.name || `image-${index + 1}.png`)),
         );
-        const mask = maskSource ? await dataUrlToFile(maskSource.dataUrl, maskSource.name || "mask.png") : null;
-        const data = await editImage({ prompt, images: files, mask, model: imageModel });
-        resultItems = mergeResultImages(turnId, data.data || [], 1);
-      }
-
-      if (mode === "upscale") {
-        const file = await dataUrlToFile(imageSources[0].dataUrl, imageSources[0].name || "upscale.png");
-        const data = await upscaleImage({ image: file, prompt, scale: upscaleScale, model: imageModel });
+        const maskURL = maskSource ? buildSourceImageUrl(maskSource) : "";
+        const mask = maskURL ? await dataUrlToFile(maskURL, maskSource?.name || "mask.png") : null;
+        const data = await editImage({ prompt, images: files, mask, size: imageSize, quality: imageQuality, model: imageModel });
         resultItems = mergeResultImages(turnId, data.data || [], 1);
       }
 
@@ -562,7 +579,7 @@ export function useImageSubmit({
         ),
       }));
 
-      resetComposer(mode === "generate" ? "generate" : mode);
+      resetComposer(mode === "generate" ? "generate" : "edit");
       if (failedCount > 0) {
         toast.error(`已返回结果，但有 ${failedCount} 张处理失败`);
       } else {
@@ -571,9 +588,7 @@ export function useImageSubmit({
             ? imageSources.length > 0
               ? "参考图生成已完成"
               : "图片已生成"
-            : mode === "edit"
-              ? "图片已编辑"
-              : "图片已放大",
+            : "图片已编辑",
         );
       }
     } catch (error) {
@@ -624,7 +639,6 @@ export function useImageSubmit({
     setSubmitStartedAt,
     sourceImages,
     updateConversation,
-    upscaleScale,
   ]);
 
   return {
