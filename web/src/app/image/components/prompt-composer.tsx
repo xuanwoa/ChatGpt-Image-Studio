@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode, type RefObject } from "react";
 import Zoom from "react-medium-image-zoom";
-import { ArrowUp, Brush, ChevronDown, CircleHelp, ImagePlus, LoaderCircle, Trash2, Upload } from "lucide-react";
+import { ArrowUp, Brush, ChevronDown, CircleHelp, ImagePlus, Trash2, Upload } from "lucide-react";
 
 import { AppImage as Image } from "@/components/app-image";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,6 @@ type PromptComposerProps = {
   availableQuota: string;
   sourceImages: StoredSourceImage[];
   imagePrompt: string;
-  isSubmitting: boolean;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   uploadInputRef: RefObject<HTMLInputElement | null>;
   maskInputRef: RefObject<HTMLInputElement | null>;
@@ -74,7 +73,6 @@ export function PromptComposer({
   availableQuota,
   sourceImages,
   imagePrompt,
-  isSubmitting,
   textareaRef,
   uploadInputRef,
   maskInputRef,
@@ -134,10 +132,10 @@ export function PromptComposer({
   return (
     <div
         className={cn(
-        "fixed inset-x-0 bottom-0 z-30 px-3 backdrop-blur supports-[padding:max(0px)]:pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 lg:static lg:inset-auto lg:bottom-auto lg:z-20 lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-t lg:bg-white lg:px-5 lg:shadow-none",
+        "fixed inset-x-0 bottom-0 z-30 px-3 backdrop-blur supports-[padding:max(0px)]:pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 lg:static lg:inset-auto lg:bottom-auto lg:z-20 lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-t lg:bg-white lg:px-5 lg:shadow-none dark:lg:border-[var(--studio-border)] dark:lg:bg-[var(--studio-panel-soft)]",
         isMobileComposerCollapsed
-          ? "border-transparent bg-white/96 shadow-none"
-          : "rounded-[26px] border border-stone-200 bg-white/96 shadow-[0_18px_50px_-24px_rgba(15,23,42,0.35)]",
+          ? "border-transparent bg-white/96 shadow-none dark:bg-[color:var(--studio-bg)]"
+          : "rounded-[26px] border border-stone-200 bg-white/96 shadow-[0_18px_50px_-24px_rgba(15,23,42,0.35)] dark:border-[var(--studio-border)] dark:bg-[color:var(--studio-bg)] dark:shadow-[0_24px_70px_-30px_rgba(0,0,0,0.82)]",
         isMobileComposerCollapsed ? "py-1.5 sm:py-2" : "py-2 sm:py-3",
         "lg:border-stone-200 lg:bg-white lg:py-4 lg:shadow-none",
       )}
@@ -160,8 +158,8 @@ export function PromptComposer({
                     className={cn(
                       "rounded-full px-3 py-1.5 text-[13px] font-medium transition sm:px-4 sm:py-2 sm:text-sm",
                       mode === item.value
-                        ? "bg-stone-950 text-white shadow-sm"
-                        : "text-stone-600 hover:bg-stone-200 hover:text-stone-900",
+                        ? "bg-stone-950 text-white shadow-sm dark:bg-[var(--studio-accent-strong)] dark:text-[var(--studio-accent-foreground)]"
+                        : "text-stone-600 hover:bg-stone-200 hover:text-stone-900 dark:text-[var(--studio-text)] dark:hover:bg-[var(--studio-panel-muted)] dark:hover:text-[var(--studio-text-strong)]",
                     )}
                   >
                     {item.label}
@@ -269,8 +267,8 @@ export function PromptComposer({
           </div>
         </div>
 
-        <div
-          className="overflow-hidden rounded-[24px] border border-stone-200 bg-[#fafaf9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] sm:rounded-[28px]"
+          <div
+          className="overflow-hidden rounded-[24px] border border-stone-200 bg-[#fafaf9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] transition-colors duration-200 dark:border-[var(--studio-border)] dark:bg-[var(--studio-panel)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] sm:rounded-[28px]"
           onClick={() => {
             setIsMobileComposerExpanded(true);
             textareaRef.current?.focus();
@@ -301,7 +299,6 @@ export function PromptComposer({
                           className="rounded-md p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
                           title="选区编辑"
                           aria-label="选区编辑"
-                          disabled={isSubmitting}
                         >
                           <Brush className="size-3.5" />
                         </button>
@@ -349,9 +346,7 @@ export function PromptComposer({
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  if (!isSubmitting) {
-                    void onSubmit();
-                  }
+                  void onSubmit();
                 }
               }}
               className={cn(
@@ -400,11 +395,10 @@ export function PromptComposer({
               <button
                 type="button"
                 onClick={() => void onSubmit()}
-                disabled={isSubmitting}
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 sm:size-9"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 dark:bg-[var(--studio-accent-strong)] dark:text-[var(--studio-accent-foreground)] dark:hover:bg-[var(--studio-accent)] dark:disabled:bg-[var(--studio-panel-muted)] dark:disabled:text-[var(--studio-text-muted)] sm:size-9"
                 aria-label="提交图片任务"
               >
-                {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                <ArrowUp className="size-4" />
               </button>
             </div>
           </div>
